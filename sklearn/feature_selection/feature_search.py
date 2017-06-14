@@ -9,21 +9,17 @@ from sklearn.externals.joblib import Parallel, delayed
 from sklearn.base import clone
 #from ..base import is_classifier
 #from ..model_selection import check_cv
-#from ..metrics.scorer import check_scoring
+from sklearn.model_selection._validation import _score
+from sklearn.metrics.scorer import check_scoring
 from sklearn.model_selection import GridSearchCV
 
-def _forward_search_single_fit(rfe, estimator, X, y, train, test, scorer):
+def _forward_search_single_fit(forward_search, estimator, X, y, scorer):
     """
     Return the score for a fit across one fold.
     """
-    pass
-    '''
-    X_train, y_train = _safe_split(estimator, X, y, train)
-    X_test, y_test = _safe_split(estimator, X, y, test, train)
-    return rfe._fit(
-        X_train, y_train, lambda estimator, features:
-        _score(estimator, X_test[:, features], y_test, scorer)).scores_
-    '''
+    return forward_search._fit(
+        X, y, lambda estimator, features:
+        _score(estimator, X[:, features], y, scorer)).scores_
 
 class ForwardSearch(object):
     '''
@@ -66,7 +62,7 @@ class ForwardSearch(object):
         self.step = step
         self.verbose = verbose
             
-    def fit(self, X, y):
+    def fit(self, X, y, n_features_to_select=None):
         """Fit the forward search model and then the underlying estimator on the selected
            features.
 
@@ -78,6 +74,8 @@ class ForwardSearch(object):
         y : array-like, shape = [n_samples]
             The target values.
         """
+        if n_features_to_select is not None:
+            self.n_features_to_select = n_features_to_select
         return self._fit(X, y)
         
     def _fit(self, X, y, step_score=None):
@@ -98,7 +96,6 @@ class ForwardSearch(object):
 
         # true means haven't added into the pool of selected features.
         support_ = np.zeros(n_features, dtype=np.bool)
-        print(support_)
         ranking_ = np.ones(n_features, dtype=np.int)
 
         if step_score:
@@ -107,40 +104,31 @@ class ForwardSearch(object):
         # Elimination
         while n_features_to_select > np.sum(support_):
             # Remaining features
+            # np.logical_not(support_) means features which not haven't been selected.
             features = np.arange(n_features)[np.logical_not(support_)]
-            print(features)
-            features_scores = np.zeros(n_features, dtype=np.float)
-
-            for index, single_support in enumerate(support_):
-                print(single_support)
-                if single_support == False:
-                    features_support = np.array(support_)
-                    features_support[index] = True
-                    
-                    # Rank the remaining features
-                    estimator = clone(GridSearchCV(self.estimator, self.param_grid))
-                    if self.verbose > 0:
-                        print("Fitting estimator with %d features." % np.sum(support_))
-                    
-                    estimator.fit(X[:, features_support], y)
-                    features_scores[index] = estimator.best_score_
-            print(features_scores)
-            print(support_)
-
+            #print('features 1 %s'%features)
+            features_scores = np.zeros(n_features, dtype=np.float)[np.logical_not(support_)]
+            
+            for index, feature in enumerate(features):
+                features_support = np.array(support_)
+                features_support[feature] = True
+                # Rank the remaining features
+                estimator = clone(GridSearchCV(self.estimator, self.param_grid))
+                if self.verbose > 0:
+                    print("Fitting estimator with %d features." % np.sum(support_))
+                
+                estimator.fit(X[:, features_support], y)
+                features_scores[index] = estimator.best_score_
             # Get ranks
             if features_scores.ndim > 1:
                 ranks = np.argsort(features_scores.sum(axis=0))
             else:
-                # set index from low to high
-                ranks = np.argsort(features_scores)
+                # set index from high to low because of '-'. np.argsort will sort array from low to high.
+                ranks = np.argsort(-features_scores)
 
             # for sparse case ranks is matrix
             ranks = np.ravel(ranks)
-            print(ranks)
             
-            print(n_features_to_select)
-            print(support_)
-            print(np.sum(support_))
             # Eliminate the best features
             threshold = min(step, n_features_to_select - np.sum(support_))
 
@@ -150,16 +138,10 @@ class ForwardSearch(object):
             # TODO: add the function of score
             if step_score:
                 self.scores_.append(step_score(estimator, features))
-            print('threshold')
-            print(threshold)
-            print(ranks)
-            print(features)
+
             support_[features[ranks][:threshold]] = True
             # lower means more import
             ranking_[np.logical_not(support_)] += 1
-            
-        print(ranking_)
-        print(support_)
 
         # Set final attributes
         features = np.arange(n_features)[support_]
@@ -246,6 +228,7 @@ class FeatureSearch(object):
         X, y = check_X_y(X, y, "csr")
         
         # Initialization
+        scorer = check_scoring(self.estimator, scoring=self.scoring)
         n_features = X.shape[1]
         n_features_to_select = 1
         if 0.0 < self.step < 1.0:
@@ -255,14 +238,11 @@ class FeatureSearch(object):
         if step <= 0:
             raise ValueError("Step must be >0")
         
-        grid_search = GridSearchCV(self.estimator, self.param_grid)
-        grid_search_result = grid_search.fit(X, y)
-        print(grid_search_result)
-        print(grid_search_result.best_params_)
-        print(grid_search_result.best_score_)
-        print(X)
-        print(y)
-        
+        forward_search = ForwardSearch(self.estimator, self.param_grid, n_features_to_select)
+        #forward_search.fit(X, y, n_features_to_select)
+        scores = _forward_search_single_fit(forward_search, self.estimator, X, y, scorer)
+        print(scores)
+        return
         # Determine the number of subsets of features by fitting across
         # the train folds and choosing the "features_to_select" parameter
         # that gives the least averaged error across all folds.
@@ -274,8 +254,8 @@ class FeatureSearch(object):
         # make sure that user code that sets n_jobs to 1
         # and provides bound methods as scorers is not broken with the
         # addition of n_jobs parameter in version 0.18.
+        '''
         if self.search_strategy == 'forward':
-            print('forward')
             self.single_fit = _forward_search_single_fit
         if self.n_jobs == 1:
             parallel, func = list, _forward_search_single_fit
@@ -283,8 +263,9 @@ class FeatureSearch(object):
             parallel, func, = Parallel(n_jobs=self.n_jobs), delayed(self.single_fit)
 
         scores = parallel(
-            func(rfe, self.estimator, X, y, train, test, scorer)
+            func(forward_search, self.estimator, X, y, train, test, scorer)
             for train, test in cv.split(X, y))
+        '''
 
         scores = np.sum(scores, axis=0)
         n_features_to_select = max(
@@ -315,6 +296,9 @@ if __name__ == "__main__":
     parameters = {'kernel':('linear', 'rbf'), 'C':[1, 10]}
     svr = svm.SVC()
     #forward_search = FeatureSearch(svr, parameters)
-    forward_search = ForwardSearch(svr, parameters)
-    forward_search.fit(iris.data, iris.target)
+    #forward_search = ForwardSearch(svr, parameters)
+    #forward_search.fit(iris.data, iris.target)
+    feature_search = FeatureSearch(svr, parameters, step=1,
+                  scoring='accuracy')
+    feature_search.fit(iris.data, iris.target)
         
