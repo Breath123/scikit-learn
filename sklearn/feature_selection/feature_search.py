@@ -5,7 +5,7 @@ Created on Jun 11, 2017
 '''
 import numpy as np
 from sklearn.utils import check_X_y
-from sklearn.externals.joblib import Parallel, delayed
+#from sklearn.externals.joblib import Parallel, delayed
 from sklearn.base import clone
 #from ..base import is_classifier
 #from ..model_selection import check_cv
@@ -98,8 +98,7 @@ class ForwardSearch(object):
         support_ = np.zeros(n_features, dtype=np.bool)
         ranking_ = np.ones(n_features, dtype=np.int)
 
-        if step_score:
-            self.scores_ = []
+        self.scores_ = []
 
         # Elimination
         while n_features_to_select > np.sum(support_):
@@ -132,25 +131,18 @@ class ForwardSearch(object):
             # Eliminate the best features
             threshold = min(step, n_features_to_select - np.sum(support_))
 
-            # Compute step score on the previous selection iteration
-            # because 'estimator' must use features
-            # that have not been eliminated yet
-            # TODO: add the function of score
-            if step_score:
-                self.scores_.append(step_score(estimator, features))
-
             support_[features[ranks][:threshold]] = True
             # lower means more import
             ranking_[np.logical_not(support_)] += 1
+            
+            # Compute step score on the selection iteration
+            self.scores_.append(features_scores[ranks][0])
 
         # Set final attributes
         features = np.arange(n_features)[support_]
         self.estimator_ = clone(self.estimator)
         self.estimator_.fit(X[:, features], y)
 
-        # Compute step score when only n_features_to_select features left
-        if step_score:
-            self.scores_.append(step_score(self.estimator_, features))
         self.n_features_ = support_.sum()
         self.support_ = support_
         self.ranking_ = ranking_
@@ -230,7 +222,7 @@ class FeatureSearch(object):
         # Initialization
         scorer = check_scoring(self.estimator, scoring=self.scoring)
         n_features = X.shape[1]
-        n_features_to_select = 1
+        n_features_to_select = n_features
         if 0.0 < self.step < 1.0:
             step = int(max(1, self.step * n_features))
         else:
@@ -238,11 +230,8 @@ class FeatureSearch(object):
         if step <= 0:
             raise ValueError("Step must be >0")
         
-        forward_search = ForwardSearch(self.estimator, self.param_grid, n_features_to_select)
-        #forward_search.fit(X, y, n_features_to_select)
+        forward_search = ForwardSearch(self.estimator, self.param_grid, n_features_to_select, step=self.step)
         scores = _forward_search_single_fit(forward_search, self.estimator, X, y, scorer)
-        print(scores)
-        return
         # Determine the number of subsets of features by fitting across
         # the train folds and choosing the "features_to_select" parameter
         # that gives the least averaged error across all folds.
@@ -266,28 +255,20 @@ class FeatureSearch(object):
             func(forward_search, self.estimator, X, y, train, test, scorer)
             for train, test in cv.split(X, y))
         '''
-
-        scores = np.sum(scores, axis=0)
+        
         n_features_to_select = max(
             n_features - (np.argmax(scores) * step),
             n_features_to_select)
-
         # Re-execute an elimination with best_k over the whole set
-        rfe = RFE(estimator=self.estimator,
-                  n_features_to_select=n_features_to_select, step=self.step)
+        forward_search_final = ForwardSearch(self.estimator, self.param_grid, n_features_to_select, step=self.step)
 
-        rfe.fit(X, y)
+        forward_search_final.fit(X, y)
 
         # Set final attributes
-        self.support_ = rfe.support_
-        self.n_features_ = rfe.n_features_
-        self.ranking_ = rfe.ranking_
-        self.estimator_ = clone(self.estimator)
-        self.estimator_.fit(self.transform(X), y)
-
-        # Fixing a normalization error, n is equal to get_n_splits(X, y) - 1
-        # here, the scores are normalized by get_n_splits(X, y)
-        self.grid_scores_ = scores[::-1] / cv.get_n_splits(X, y)
+        self.support_ = forward_search_final.support_
+        self.n_features_ = forward_search_final.n_features_
+        self.ranking_ = forward_search_final.ranking_
+        
         return self
         
 if __name__ == "__main__":
@@ -301,4 +282,5 @@ if __name__ == "__main__":
     feature_search = FeatureSearch(svr, parameters, step=1,
                   scoring='accuracy')
     feature_search.fit(iris.data, iris.target)
+    print(feature_search.n_features_)
         
