@@ -19,6 +19,8 @@ from .variance_threshold import VarianceThreshold
 
 from .rfe import RFE
 from .rfe import RFECV
+from .feature_search import FeatureSearch
+from .feature_search import ForwardSearch
 
 from .from_model import SelectFromModel
 

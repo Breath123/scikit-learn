@@ -12,6 +12,7 @@ from sklearn.base import clone
 from sklearn.model_selection._validation import _score
 from sklearn.metrics.scorer import check_scoring
 from sklearn.model_selection import GridSearchCV
+from sklearn.feature_selection.base import SelectorMixin
 
 def _forward_search_single_fit(forward_search, estimator, X, y, scorer):
     """
@@ -21,7 +22,7 @@ def _forward_search_single_fit(forward_search, estimator, X, y, scorer):
         X, y, lambda estimator, features:
         _score(estimator, X[:, features], y, scorer)).scores_
 
-class ForwardSearch(object):
+class ForwardSearch(SelectorMixin):
     '''
     Parameters
     ----------
@@ -140,7 +141,7 @@ class ForwardSearch(object):
 
         # Set final attributes
         features = np.arange(n_features)[support_]
-        self.estimator_ = clone(self.estimator)
+        self.estimator_ = clone(GridSearchCV(self.estimator, self.param_grid))
         self.estimator_.fit(X[:, features], y)
 
         self.n_features_ = support_.sum()
@@ -148,8 +149,11 @@ class ForwardSearch(object):
         self.ranking_ = ranking_
 
         return self
+    
+    def _get_support_mask(self):
+        return self.support_
 
-class FeatureSearch(object):
+class FeatureSearch(ForwardSearch):
     '''
     Parameters
     ----------
@@ -268,6 +272,8 @@ class FeatureSearch(object):
         self.support_ = forward_search_final.support_
         self.n_features_ = forward_search_final.n_features_
         self.ranking_ = forward_search_final.ranking_
+        self.estimator_ = clone(GridSearchCV(self.estimator, self.param_grid))#clone(self.estimator)
+        self.estimator_.fit(self.transform(X), y)
         
         return self
         
@@ -283,4 +289,7 @@ if __name__ == "__main__":
                   scoring='accuracy')
     feature_search.fit(iris.data, iris.target)
     print(feature_search.n_features_)
+    print(feature_search.estimator_)
+    print(feature_search.estimator_.best_score_)
+    print(feature_search.estimator_.best_estimator_)
         
